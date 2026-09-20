@@ -1,0 +1,6 @@
+{
+  "name": "Enigma Pipeline Audit Inventory Inspector",
+  "description": "Interactive inspector and analyzer for Enigma Pipeline storage audit inventories, schema discovery, JSON queries, and CLI diagnostic tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
