@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Search, Filter, Lock, Unlock, AlertCircle, CheckCircle2, FileText, ChevronLeft, ChevronRight, Eye, Copy, Check, Download, ArrowUpDown, ArrowUp, ArrowDown, X } from 'lucide-react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { Search, Filter, Lock, Unlock, AlertCircle, CheckCircle2, FileText, ChevronLeft, ChevronRight, Eye, Copy, Check, Download, ArrowUpDown, ArrowUp, ArrowDown, X, ChevronDown, FileSpreadsheet, Database } from 'lucide-react';
 import { AuditRecord } from '../types';
 
 interface InventoryTableProps {
@@ -23,6 +23,19 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ records, initial
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -95,23 +108,16 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ records, initial
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const exportFilteredJson = () => {
-    const blob = new Blob([JSON.stringify(filteredRecords, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'audit_inventory_filtered.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const exportCsv = (mode: 'filtered' | 'total') => {
+    const targetRecords = mode === 'filtered' ? filteredRecords : records;
+    if (targetRecords.length === 0) return;
 
-  const exportFilteredCsv = () => {
-    if (filteredRecords.length === 0) return;
     const headers = [
       'record_id',
       'file_path',
       'storage_uri',
       'size_bytes',
+      'size_human',
       'checksum_sha256',
       'pipeline_stage',
       'storage_class',
@@ -122,35 +128,83 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ records, initial
       'retention_days',
       'health_status',
       'format',
+      'compression',
+      'record_count',
+      'partition_key',
       'tags'
     ];
 
-    const rows = filteredRecords.map((r) => [
-      r.record_id,
-      `"${(r.file_path || '').replace(/"/g, '""')}"`,
-      `"${(r.storage_uri || '').replace(/"/g, '""')}"`,
-      r.size_bytes,
-      r.checksum_sha256,
-      r.pipeline_stage,
-      r.storage_class,
-      r.owner_service,
-      r.created_at,
-      r.last_modified,
-      r.is_encrypted ? 'true' : 'false',
-      r.retention_days,
-      r.health_status,
-      r.metadata?.format || '',
-      `"${(r.tags || []).join(',')}"`
+    const escapeCsv = (val: any): string => {
+      if (val === null || val === undefined) return '';
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = targetRecords.map((r) => [
+      escapeCsv(r.record_id),
+      escapeCsv(r.file_path),
+      escapeCsv(r.storage_uri),
+      escapeCsv(r.size_bytes),
+      escapeCsv(formatSize(r.size_bytes)),
+      escapeCsv(r.checksum_sha256),
+      escapeCsv(r.pipeline_stage),
+      escapeCsv(r.storage_class),
+      escapeCsv(r.owner_service),
+      escapeCsv(r.created_at),
+      escapeCsv(r.last_modified),
+      escapeCsv(r.is_encrypted ? 'true' : 'false'),
+      escapeCsv(r.retention_days),
+      escapeCsv(r.health_status),
+      escapeCsv(r.metadata?.format || ''),
+      escapeCsv(r.metadata?.compression || 'none'),
+      escapeCsv(r.metadata?.record_count ?? ''),
+      escapeCsv(r.metadata?.partition_key || ''),
+      escapeCsv((r.tags || []).join(';'))
     ]);
 
-    const csvContent = [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+    const csvContent = [headers.join(','), ...rows.map((row) => row.join(','))].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'audit_inventory_filtered.csv';
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = mode === 'filtered'
+      ? `audit_inventory_filtered_${targetRecords.length}_records_${dateStr}.csv`
+      : `audit_inventory_total_${targetRecords.length}_records_${dateStr}.csv`;
+    a.download = filename;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
+
+    setShowExportMenu(false);
+    setExportNotice(`Exported ${targetRecords.length} ${mode === 'filtered' ? 'filtered' : 'total'} records to ${filename}`);
+    setTimeout(() => setExportNotice(null), 4000);
+  };
+
+  const exportJson = (mode: 'filtered' | 'total') => {
+    const targetRecords = mode === 'filtered' ? filteredRecords : records;
+    if (targetRecords.length === 0) return;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = mode === 'filtered'
+      ? `audit_inventory_filtered_${targetRecords.length}_records_${dateStr}.json`
+      : `audit_inventory_total_${targetRecords.length}_records_${dateStr}.json`;
+    const blob = new Blob([JSON.stringify(targetRecords, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setShowExportMenu(false);
+    setExportNotice(`Exported ${targetRecords.length} ${mode === 'filtered' ? 'filtered' : 'total'} records to ${filename}`);
+    setTimeout(() => setExportNotice(null), 4000);
   };
 
   return (
@@ -246,22 +300,111 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ records, initial
               <span>Unencrypted Only</span>
             </button>
 
-            <button
-              onClick={exportFilteredCsv}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg border border-indigo-500 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
-              title="Export filtered records as CSV file"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>CSV</span>
-            </button>
-            <button
-              onClick={exportFilteredJson}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-colors"
-              title="Export filtered records as JSON file"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>JSON</span>
-            </button>
+            {/* Export CSV and Data Controls */}
+            <div className="relative inline-block" ref={exportMenuRef}>
+              <div className="inline-flex rounded-lg shadow-sm">
+                <button
+                  id="btn-export-csv-main"
+                  onClick={() => exportCsv('filtered')}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white rounded-l-lg border border-indigo-500 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+                  title={`Export CSV: ${filteredRecords.length !== records.length ? 'filtered' : 'all'} (${filteredRecords.length}) records to CSV`}
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                  <span className="ml-0.5 px-1.5 py-0.2 bg-indigo-800/80 rounded text-[10px] font-mono border border-indigo-400/30">
+                    {filteredRecords.length}
+                  </span>
+                </button>
+                <button
+                  id="btn-export-csv-dropdown"
+                  onClick={() => setShowExportMenu(prev => !prev)}
+                  className="px-2 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white rounded-r-lg border-y border-r border-indigo-500 text-xs transition-colors flex items-center justify-center"
+                  title="Export options: Filtered vs Total dataset CSV"
+                  aria-label="Export options menu"
+                  aria-expanded={showExportMenu}
+                >
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${showExportMenu ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
+
+              {/* Dropdown Menu */}
+              {showExportMenu && (
+                <div className="absolute right-0 mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-40 py-1.5 text-xs">
+                  <div className="px-3 py-2 border-b border-slate-800">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">CSV Data Export</p>
+                    <p className="text-[11px] text-slate-500">Structured tabular format for Excel, Python & BigQuery</p>
+                  </div>
+
+                  <div className="p-1.5 space-y-1">
+                    <button
+                      id="btn-export-csv-filtered"
+                      onClick={() => exportCsv('filtered')}
+                      disabled={filteredRecords.length === 0}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-indigo-600/20 text-slate-200 hover:text-indigo-300 transition-colors flex items-center justify-between group disabled:opacity-40"
+                    >
+                      <div className="flex items-center gap-2">
+                        <FileSpreadsheet className="w-4 h-4 text-indigo-400 group-hover:text-indigo-300" />
+                        <div>
+                          <div className="font-semibold text-xs text-white">Export Filtered CSV</div>
+                          <div className="text-[10px] text-slate-400">Current filters & search</div>
+                        </div>
+                      </div>
+                      <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 group-hover:bg-indigo-500/30 group-hover:text-indigo-200">
+                        {filteredRecords.length} rows
+                      </span>
+                    </button>
+
+                    <button
+                      id="btn-export-csv-total"
+                      onClick={() => exportCsv('total')}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-600/20 text-slate-200 hover:text-emerald-300 transition-colors flex items-center justify-between group"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Database className="w-4 h-4 text-emerald-400 group-hover:text-emerald-300" />
+                        <div>
+                          <div className="font-semibold text-xs text-white">Export Total Inventory CSV</div>
+                          <div className="text-[10px] text-slate-400">All audit records across pipeline</div>
+                        </div>
+                      </div>
+                      <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 group-hover:bg-emerald-500/30 group-hover:text-emerald-200">
+                        {records.length} rows
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="pt-1.5 mt-1 border-t border-slate-800 p-1.5 space-y-1">
+                    <button
+                      id="btn-export-json-filtered"
+                      onClick={() => exportJson('filtered')}
+                      disabled={filteredRecords.length === 0}
+                      className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors flex items-center justify-between group disabled:opacity-40"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Download className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="text-xs">Export Filtered JSON</span>
+                      </div>
+                      <span className="font-mono text-[11px] text-slate-500">
+                        {filteredRecords.length}
+                      </span>
+                    </button>
+
+                    <button
+                      id="btn-export-json-total"
+                      onClick={() => exportJson('total')}
+                      className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors flex items-center justify-between group"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Download className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="text-xs">Export Total JSON</span>
+                      </div>
+                      <span className="font-mono text-[11px] text-slate-500">
+                        {records.length}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -397,11 +540,16 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ records, initial
 
         {/* Pagination Bar */}
         <div className="p-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <div>
               Showing <span className="text-white font-medium">{filteredRecords.length > 0 ? (currentPage - 1) * pageSize + 1 : 0}</span> to{' '}
               <span className="text-white font-medium">{Math.min(currentPage * pageSize, filteredRecords.length)}</span> of{' '}
               <span className="text-white font-medium">{filteredRecords.length}</span> entries
+              {filteredRecords.length !== records.length && (
+                <span className="text-slate-500 ml-1">
+                  (filtered from {records.length} total)
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-1.5 border-l border-slate-800 pl-3">
@@ -419,6 +567,28 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ records, initial
                 <option value={50}>50</option>
                 <option value={100}>100</option>
               </select>
+            </div>
+
+            <div className="hidden md:flex items-center gap-2 border-l border-slate-800 pl-3">
+              <span className="text-slate-500 text-[11px]">CSV:</span>
+              <button
+                id="btn-footer-export-filtered-csv"
+                onClick={() => exportCsv('filtered')}
+                className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium hover:underline flex items-center gap-1"
+                title="Download CSV of current filtered records"
+              >
+                <Download className="w-3 h-3" />
+                <span>Filtered ({filteredRecords.length})</span>
+              </button>
+              <span className="text-slate-700">•</span>
+              <button
+                id="btn-footer-export-total-csv"
+                onClick={() => exportCsv('total')}
+                className="text-[11px] text-slate-400 hover:text-slate-200 font-medium hover:underline flex items-center gap-1"
+                title="Download CSV of all records"
+              >
+                <span>Total ({records.length})</span>
+              </button>
             </div>
           </div>
 
@@ -504,6 +674,29 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ records, initial
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Export Toast Notification */}
+      {exportNotice && (
+        <div
+          id="export-toast-notification"
+          className="fixed bottom-6 right-6 z-50 bg-slate-900 border border-indigo-500/50 text-indigo-200 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-mono"
+        >
+          <div className="w-6 h-6 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
+            <Check className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="font-bold text-white">CSV Export Ready</div>
+            <div className="text-[11px] text-slate-400">{exportNotice}</div>
+          </div>
+          <button
+            onClick={() => setExportNotice(null)}
+            className="text-slate-500 hover:text-slate-300 ml-2 p-1"
+            title="Dismiss notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>
